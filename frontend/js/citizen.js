@@ -12,18 +12,8 @@ let loc = null, locIsDemo = false, currentMap = null, counts = { people: 1, chil
 
 /* ---- Weather Intelligence + forecast-derived early warning (Open-Meteo) ---- */
 async function loadWeather() {
-  try {
-    const w = await resqApi(loc ? `/api/weather?lat=${loc.lat}&lng=${loc.lng}` : '/api/weather');
-    $('#weatherBody').innerHTML = `Temperature: <b>${w.temperature_c}°C</b> &nbsp; Rain probability: <b>${w.rain_probability_pct}%</b><br>
-      Precipitation: <b>${w.precipitation_mm} mm</b> &nbsp; Wind: <b>${w.wind_speed_kmh} km/h</b><br>Next 12h: rain up to <b>${w.rain_probability_pct}%</b> · <b>${w.forecast_rain_12h_mm} mm</b> · max wind <b>${w.forecast_max_wind_kmh} km/h</b><br>
-      <span class="mut" style="font-size:11px">Source: ${w.source} · Updated ${new Date(w.updated * 1000).toLocaleTimeString()}</span>`;
-    const ew = w.early_warning;
-    $('#warnBody').innerHTML = ew.level === 'LOW' ? '' :
-      `<div class="warnbox ${ew.level.toLowerCase()}"><b>${ew.label}</b><br>${ew.text}<br><span class="mut" style="font-size:11px">${ew.disclaimer}</span></div>`;
-  } catch (e) {
-    $('#weatherBody').textContent = 'Weather service temporarily unavailable';
-    $('#warnBody').innerHTML = '';
-  }
+  await resqLoadWeather($('#weatherBody'), { full: false }, loc ? loc.lat : null, loc ? loc.lng : null);
+  $('#warnBody').innerHTML = '';
 }
 loadWeather(); setInterval(loadWeather, 5 * 60 * 1000);
 
@@ -149,6 +139,8 @@ function connect() {
   if (ws) return;
   ws = resqConnect((event, data) => {
     if (event === 'snapshot') { const mine = data.incidents.find(i => i.id === trackedId); if (mine) applyIncident(mine); return; }
+    if (event === 'weather_advisory') { showWeatherToast('⚠ ' + weatherToastText(data)); loadWeather(); return; }
+    if (event === 'control_alert') { showWeatherToast('🚨 Control Room: ' + data.message); return; }
     if (!trackedId) return;
     if ((event === 'incident_updated' || event === 'route_updated' || event === 'incident_status_updated') && data.id === trackedId) { const old=myInc?.status; applyIncident(data); if(event!=='route_updated'&&old&&old!==data.status) showStatusToast(data.status); }
     if (event === 'team_assigned' && data.incident && data.incident.id === trackedId) applyIncident(data.incident);

@@ -388,11 +388,14 @@ def user_out(u: User) -> dict:
 def register(b: RegisterIn, db: Session = Depends(db_dep)):
     """Citizens self-register. Control Room / Rescue Team accounts are provisioned
     ahead of time (see README test accounts) since they represent real personnel."""
+    b.email = b.email.strip().lower()
+    if not b.email or not b.name.strip():
+        raise HTTPException(400, "Name and email are required")
     if db.get(User, b.email):
         raise HTTPException(400, "An account with this email already exists")
     if len(b.password) < 4:
         raise HTTPException(400, "Password must be at least 4 characters")
-    u = User(email=b.email, password_hash=hash_pw(b.password), role="CITIZEN", name=b.name)
+    u = User(email=b.email, password_hash=hash_pw(b.password), role="CITIZEN", name=b.name.strip())
     db.add(u)
     db.commit()
     return user_out(u)
@@ -400,7 +403,7 @@ def register(b: RegisterIn, db: Session = Depends(db_dep)):
 
 @app.post("/api/auth/login")
 def login(b: LoginIn, db: Session = Depends(db_dep)):
-    u = db.get(User, b.email)
+    u = db.get(User, b.email.strip()) or db.get(User, b.email.strip().lower())
     if not u or not hmac.compare_digest(u.password_hash, hash_pw(b.password)):
         raise HTTPException(401, "Email or password is incorrect")
     return user_out(u)
@@ -421,11 +424,27 @@ def health():
 # Small in-memory cache so a busy dashboard doesn't hammer the upstream API.
 # ================================================================================
 _weather_cache: dict = {}
-_weather_advisories_sent = set()
+_weather_advisories_sent: dict = {}      # (location, level, triggers) -> time the notification was sent
+ADVISORY_RENOTIFY_S = 3 * 3600           # the same advisory is re-announced at most every 3 hours
+WEATHER_UNAVAILABLE_DETAIL = "Weather data unavailable"
+
+
+def _advisory_notification(triggers: list, level: str) -> str:
+    """Short, honest notification text derived from which forecast thresholds were actually met."""
+    joined = " ".join(triggers)
+    parts = []
+    if "rain" in joined:
+        parts.append("Increased rainfall conditions are forecast")
+    if "wind" in joined:
+        parts.append("Strong winds are forecast")
+    return "Weather Advisory: " + "; ".join(parts) + f" ({level} - forecast-derived, not an official warning)."
 
 
 @app.get("/api/weather")
 async def weather(lat: float = 11.9416, lng: float = 79.8083):
+    """Open-Meteo current conditions + 12-hour hourly forecast, and a forecast-derived advisory
+    (LOW / MODERATE / HIGH) computed from that forecast. Nothing here is hard-coded: if Open-Meteo
+    fails, HTTP 503 is returned and NO advisory is generated (stale values are never served)."""
     key = (round(lat, 2), round(lng, 2))
     cached = _weather_cache.get(key)
     if cached and time.time() - cached["_t"] < 300:
@@ -441,11 +460,19 @@ async def weather(lat: float = 11.9416, lng: float = 79.8083):
             })
             r.raise_for_status()
             j = r.json()
-        cur = j.get("current", {})
-        hourly = j.get("hourly", {})
-        probs = [float(x or 0) for x in hourly.get("precipitation_probability", [])[:12]]
-        precip = [float(x or 0) for x in hourly.get("precipitation", [])[:12]]
-        winds = [float(x or 0) for x in hourly.get("wind_speed_10m", [])[:12]]
+        cur = j.get("current") or {}
+        hourly = j.get("hourly") or {}
+        times = (hourly.get("time") or [])[:12]
+        if cur.get("temperature_2m") is None or not times:
+            raise ValueError("Open-Meteo response missing current/hourly data")
+
+        def col(name):
+            vals = list(hourly.get(name) or [])[:12]
+            return [float(x or 0) for x in vals] + [0.0] * (len(times) - len(vals))
+
+        probs, precip, winds = col("precipitation_probability"), col("precipitation"), col("wind_speed_10m")
+        hours = [{"time": times[k], "rain_probability_pct": round(probs[k]), "precipitation_mm": round(precip[k], 1),
+                  "wind_speed_kmh": round(winds[k], 1)} for k in range(len(times))]
         rain_prob = max(probs, default=0)
         max_hourly_rain = max(precip, default=0)
         forecast_rain_total = round(sum(precip), 1)
@@ -472,26 +499,51 @@ async def weather(lat: float = 11.9416, lng: float = 79.8083):
             "forecast_max_hourly_rain_mm": max_hourly_rain,
             "forecast_max_wind_kmh": round(max_wind, 1),
             "wind_speed_kmh": cur.get("wind_speed_10m"),
+            "hourly": hours,
+            "location": {"lat": lat, "lng": lng},
             "source": "Open-Meteo", "updated": time.time(),
             "forecast_window_hours": 12,
             "early_warning": {
                 "level": risk,
-                "label": "Forecast-derived Advisory" if risk != "LOW" else "Forecast conditions normal",
-                "text": ("Multiple forecast risk indicators detected: " + "; ".join(triggers) if triggers
-                         else "No configured rain or wind advisory threshold is currently met."),
+                "label": "Forecast-derived Advisory",
+                "text": ("Forecast risk indicators detected: " + "; ".join(triggers) if triggers
+                         else "No configured rain or wind advisory threshold is met in the next 12 hours."),
                 "triggers": triggers,
+                "notification": _advisory_notification(triggers, risk) if triggers else None,
+                "source": "Open-Meteo",
                 "disclaimer": "Forecast-derived advisory, not an official warning. Thresholds are prototype rules; no government warning source is integrated.",
             },
         }
         _weather_cache[key] = {"_t": time.time(), "_data": data}
         if risk != "LOW":
             advisory_key = (key, risk, tuple(triggers))
-            if advisory_key not in _weather_advisories_sent:
-                _weather_advisories_sent.add(advisory_key)
+            last = _weather_advisories_sent.get(advisory_key)
+            if last is None or time.time() - last > ADVISORY_RENOTIFY_S:
+                _weather_advisories_sent[advisory_key] = time.time()
                 await broadcast("weather_advisory", {"location": {"lat": lat, "lng": lng}, "advisory": data["early_warning"], "weather": data})
         return data
     except Exception:
-        raise HTTPException(503, "Weather service temporarily unavailable")
+        _weather_cache.pop(key, None)
+        raise HTTPException(503, WEATHER_UNAVAILABLE_DETAIL)
+
+
+class AlertIn(BaseModel):
+    message: str
+    incident_id: Optional[str] = None
+
+
+@app.post("/api/alerts/broadcast")
+async def broadcast_alert(b: AlertIn, user: User = Depends(require_roles("CONTROL_ROOM")), db: Session = Depends(db_dep)):
+    """Real control-room alert: pushed over WebSocket to every connected rescue team and citizen page.
+    (Previously the dashboard buttons only showed a local toast and sent nothing.)"""
+    msg = (b.message or "").strip()
+    if not msg:
+        raise HTTPException(400, "Alert message is empty")
+    if b.incident_id and not db.get(Incident, b.incident_id):
+        raise HTTPException(404, "Incident not found")
+    payload = {"message": msg[:280], "incident_id": b.incident_id, "from": user.name, "time": time.time()}
+    await broadcast("control_alert", payload)
+    return {"ok": True, "recipients": len(clients), **payload}
 
 
 # ================================================================================
@@ -722,6 +774,7 @@ async def reassign_incident(iid: str, b: ReassignIn, user: User = Depends(requir
         old_team.status, old_team.assigned_incident = "AVAILABLE", None
     new_team.status, new_team.assigned_incident = "ASSIGNED", inc.id
     inc.team_id, inc.status = new_team.id, "ASSIGNED"
+    inc.route_km = inc.route_min = inc.route_geometry = None   # the old team's route no longer applies
     if new_team.location_source == "GPS" and new_team.location_updated:
         inc.distance_km = round(haversine_km(inc.lat, inc.lng, new_team.lat, new_team.lng), 1)
     log_event(db, inc.id, "ASSIGNED", user.email, f"Officer reassigned to {new_team.name}")

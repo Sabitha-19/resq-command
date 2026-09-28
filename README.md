@@ -106,21 +106,23 @@ The officer can still manually assign an unclaimed SOS using the existing contro
 
 `POST /api/incidents/{incident_id}/reassign` with `{ "team_id": "T2" }`
 
-## Weather advisory
+## Weather Intelligence (Open-Meteo)
 
-The existing Open-Meteo integration now checks a **12-hour hourly forecast**, not only current conditions. The prototype looks for:
+`GET /api/weather?lat=&lng=` calls Open-Meteo for current conditions plus a **12-hour hourly forecast**. Nothing is hard-coded. The response includes temperature, current wind, peak rain probability, 12-hour rainfall total, the full `hourly` list, and a **forecast-derived advisory** (`LOW` / `MODERATE` / `HIGH`) calculated from that forecast:
 
-- high forecast rain probability
-- significant forecast rainfall
-- strong forecast wind
+- rain probability >= 70%, forecast rainfall >= 10 mm/h or >= 25 mm/12h, wind >= 50 km/h -> `MODERATE`
+- two or more of those, >= 20 mm/h, or wind >= 65 km/h -> `HIGH`
 
-When configured thresholds are met, the server emits one deduplicated `weather_advisory` WebSocket event for that forecast condition. Control Room, Citizen and Rescue pages show a toast/banner labelled:
+The advisory is always labelled **Forecast-derived Advisory**, shows **Source: Open-Meteo**, and is never presented as an official government warning.
 
-**Forecast-derived Advisory**
+- **Control Room:** full Weather Intelligence panel (4 metrics, 12-hour forecast strip, advisory level).
+- **Citizen / Rescue:** compact weather + safety card. Citizen uses the SOS/GPS location; Rescue uses the team's real GPS when known.
+- **If Open-Meteo fails:** the API returns 503 and every page shows *"Weather data unavailable"* / *"No weather advisory is being generated because the external weather service is unavailable."* No stale or invented values are shown.
+- **Notifications:** for MODERATE/HIGH, the server emits a `weather_advisory` WebSocket event (e.g. "Weather Advisory: Increased rainfall conditions are forecast ...") shown as a toast on Citizen, Control Room and Rescue pages. The same advisory is re-announced at most every 3 hours.
 
-It is **not** called an official warning because no official warning feed is integrated.
+## Control-room alerts
 
-If Open-Meteo is unavailable, the UI reports the service failure and does not invent weather values.
+`POST /api/alerts/broadcast` (Control Room only) pushes a `control_alert` WebSocket event to every connected rescue and citizen page. The dashboard's **Broadcast alert** and per-incident **Send warning** buttons use it (they previously only showed a local toast).
 
 ## Notifications
 
@@ -151,7 +153,7 @@ Do not use the demo-location button as evidence of live GPS; it remains explicit
 - `backend/main.py` — atomic SOS claims, presence/availability, forecast advisory, GPS-only routing, reassignment, status state machine, live broadcasts
 - `backend/database.py` — additive team GPS-source field and updated status/distance model comments/defaults
 - `frontend/js/ws.js` — WebSocket identity/presence handshake
-- `frontend/js/livemap.js` — team availability states and smooth GPS marker movement
+- `frontend/js/livemap.js` — team availability states and smooth GPS marker movement; shared Weather Intelligence renderer
 - `frontend/js/rescue.js` — all-team SOS queue, atomic accept flow, operational notifications, GPS, weather
 - `frontend/js/citizen.js` — live current-location map, forecast display, status/weather notifications, completion states
 - `frontend/js/dashboard.js` — team availability, live claim/status/weather notifications, completion states, map sizing/animation

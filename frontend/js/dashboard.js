@@ -8,24 +8,14 @@ $('#logout').onclick = e => { e.preventDefault(); resqLogout(); };
 const setConn = connBadge($('#wsst'));
 resqWatchBackend(ok => { const b = $('#backendst'); b.textContent = ok ? '● Backend Connected' : '○ Backend Disconnected'; b.className = 'connbadge ' + (ok ? 'live' : 'offline'); });
 
-/* ---- Weather Intelligence + forecast-derived early warning (Open-Meteo) ---- */
-const HQ = { lat: 11.9416, lng: 79.8083 };
+/* ---- Weather Intelligence + forecast-derived advisory (Open-Meteo, via /api/weather) ---- */
+const HQ = { lat: 11.9416, lng: 79.8083 };   // control-room map centre used as the forecast point
 let weatherOk = false;
 async function loadWeather() {
-  try {
-    const w = await resqApi(`/api/weather?lat=${HQ.lat}&lng=${HQ.lng}`);
-    weatherOk = true;
-    $('#weatherBody').innerHTML = `Temperature: <b>${w.temperature_c}°C</b> &nbsp; Rain probability: <b>${w.rain_probability_pct}%</b><br>
-      Precipitation: <b>${w.precipitation_mm} mm</b> &nbsp; Wind: <b>${w.wind_speed_kmh} km/h</b><br>
-      <span class="mut" style="font-size:11px">Source: ${w.source} · Updated ${new Date(w.updated * 1000).toLocaleTimeString()}</span>`;
-    const ew = w.early_warning;
-    $('#warnBody').innerHTML = ew.level === 'LOW' ? '' :
-      `<div class="warnbox ${ew.level.toLowerCase()}"><b>${ew.label}</b><br>${ew.text}<br><span class="mut" style="font-size:11px">${ew.disclaimer}</span></div>`;
-  } catch (e) {
-    weatherOk = false;
-    $('#weatherBody').textContent = 'Weather service temporarily unavailable';
-    $('#warnBody').innerHTML = '';
-  }
+  const w = await resqLoadWeather($('#weatherBody'), { full: true }, HQ.lat, HQ.lng);
+  weatherOk = !!w;
+  $('#weatherLoc').textContent = w ? `· forecast point ${coordText(HQ.lat, HQ.lng)}` : '';
+  $('#warnBody').innerHTML = '';
 }
 loadWeather(); setInterval(loadWeather, 5 * 60 * 1000);
 const fmt = s => String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(Math.floor(s % 60)).padStart(2, '0');
@@ -45,14 +35,27 @@ let unread = 0;
 function toast(msg) { const d = document.createElement('div'); d.className = 'toast'; d.textContent = msg; $('#toasts').append(d); setTimeout(() => d.remove(), 4000) }
 function feed(msg, notify = true) { const li = document.createElement('li'); li.innerHTML = `${msg} <span class="mut">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>`; $('#fl').prepend(li); if (notify) $('#nb').textContent = ++unread }
 function count(el, to) { const from = +el.dataset.v || 0; el.dataset.v = to; const t0 = performance.now(); (function f(t) { const k = Math.min(1, (t - t0) / 600); el.textContent = Math.round(from + (to - from) * k); if (k < 1) requestAnimationFrame(f) })(t0) }
-const spark = () => { const p = Array.from({ length: 8 }, (_, i) => `${i * 14},${26 - Math.random() * 22}`).join(' '); return `<svg viewBox="0 0 98 28" aria-hidden="true"><polyline points="${p}" fill="none" stroke="#ff6b00" stroke-width="2"/></svg>` };
+const spark = () => '';   // decorative random sparkline removed: it implied a trend that was not real data
 function beep() { try { const ctx = new (window.AudioContext || window.webkitAudioContext)(); const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = 880; o.connect(g); g.connect(ctx.destination); g.gain.setValueAtTime(.08, ctx.currentTime); o.start(); o.stop(ctx.currentTime + .15); } catch (e) {} }
 
 /* ---- Clock + sidebar ---- */
 setInterval(() => $('#clock').textContent = new Date().toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' }), 1000);
 $('#collapse').onclick = () => $('#side').classList.toggle('mini');
 $('#bell').onclick = () => { unread = 0; $('#nb').textContent = 0; $('#feed').scrollIntoView({ behavior: 'smooth' }) };
-$('#bcast').onclick = () => { feed('<b>Emergency alert broadcast</b> to all teams'); toast('✓ Alert sent to all rescue teams') };
+$('#bcast').onclick = async () => {
+  const message = prompt('Emergency alert to send to all connected rescue teams and citizens:');
+  if (!message || !message.trim()) return;
+  try { const r = await resqApi('/api/alerts/broadcast', { method: 'POST', body: JSON.stringify({ message }) }); feed(`<b>Emergency alert broadcast</b> · ${message.trim()}`); toast(`✓ Alert delivered to ${r.recipients} connected client(s)`); }
+  catch (e) { toast(e.message || 'Could not send alert'); }
+};
+async function sendWarning(id) {
+  const i = byId(id); if (!i) return;
+  const message = prompt(`Warning for ${id} (${coordText(i.lat, i.lng)}):`, `Warning for ${i.type} emergency ${id}`);
+  if (!message || !message.trim()) return;
+  try { await resqApi('/api/alerts/broadcast', { method: 'POST', body: JSON.stringify({ message, incident_id: id }) }); feed(`<b>Warning sent</b> · ${id} · ${message.trim()}`); toast('✓ Warning sent'); }
+  catch (e) { toast(e.message || 'Could not send warning'); }
+}
+window.sendWarning = sendWarning;
 $('#search').oninput = renderQueue;
 
 /* ---- Map (Leaflet + OpenStreetMap) ---- */
@@ -153,7 +156,7 @@ async function assign(id) {
   try {
     await resqApi(`/api/teams/${t.id}/assign`, { method: 'POST', body: JSON.stringify({ incident_id: id }) });
     toast(`✓ Rescue ${t.name} assigned successfully`);
-  } catch (e) { toast('Could not assign - check the connection'); }
+  } catch (e) { toast(e.message || 'Could not assign - check the connection'); }
 }
 async function resolve(id) {
   if (!confirm(`Mark ${id} as resolved?`)) return;
@@ -183,7 +186,7 @@ function openD(id) {
  <div class="tl">${labels.map((t, k) => `<div class="${k < (done < 0 ? 2 : done + 2) ? 'd' : ''}">${t}</div>`).join('')}</div>
  <div class="acts"><button class="btn-o" onclick="assign('${i.id}')" ${i.status !== 'NEW' ? 'disabled' : ''}>Assign rescue team</button><select id="reassignTeam" ${i.status === 'COMPLETED' || i.status === 'RESOLVED' ? 'disabled' : ''} style="max-width:180px"><option value="">Officer override…</option>${T.filter(t=>(t.availability || (t.online ? (t.status==='AVAILABLE'?'AVAILABLE':'BUSY') : 'OFFLINE'))==='AVAILABLE' && t.id!==i.team_id).map(t=>`<option value="${t.id}">${t.name}</option>`).join('')}</select><button onclick="reassign('${i.id}')" ${i.status === 'COMPLETED' || i.status === 'RESOLVED' ? 'disabled' : ''}>Reassign</button><button onclick="focusRoute('${i.id}');closeD()" ${i.team_id ? '' : 'disabled'}>Show route on map</button>
  <a href="${gmapsUrl(i.lat, i.lng)}" target="_blank"><button type="button">🧭 Open Navigation</button></a>
- <button onclick="feed('Warning sent near ${coordText(i.lat, i.lng)}');toast('✓ Warning sent')">Send warning</button>
+ <button onclick="sendWarning('${i.id}')">Send warning</button>
  <button onclick="resolve('${i.id}')" ${['COMPLETED','RESOLVED'].includes(i.status) ? 'disabled' : ''}>Mark completed</button></div>`;
   $('#drawer').classList.add('open');
   resqGeocode(i.lat, i.lng).then(ad => { const el = $('#drAddr'); if (el && ad) el.innerHTML = `<span style="color:var(--tx)">${ad}</span><br>`; });
@@ -221,7 +224,7 @@ resqConnect((event, data) => {
   if (event === 'team_assigned') { upsertIncident(data.incident); upsertTeam(data.team); refresh(); focusRoute(data.incident.id); }
   if (event === 'incident_claimed') { upsertIncident(data.incident); upsertTeam(data.team); refresh(); toast(`🚑 ${data.team.name} claimed ${data.incident.id}`); }
   if (event === 'incident_reassigned') { upsertIncident(data.incident); upsertTeam(data.team); refresh(); toast(`↪ ${data.incident.id} reassigned to ${data.team.name}`); }
-  if (event === 'weather_advisory') { feed(`<b>⚠ Forecast-derived Advisory</b> · ${data.advisory.text}`); toast(`⚠ Forecast-derived Advisory · ${data.advisory.text}`); }
+  if (event === 'weather_advisory') { const m = weatherToastText(data); feed(`<b>⚠ ${m}</b>`); toast(`⚠ ${m}`); loadWeather(); }
   if (event === 'team_presence_updated') { resqApi('/api/teams').then(v => { T=v; refresh(); }).catch(()=>{}); }
 }, setConn);
 

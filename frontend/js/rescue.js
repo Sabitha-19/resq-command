@@ -23,14 +23,17 @@ function toast(msg, kind='info') {
 }
 
 async function loadWeather(){
-  try{const w=await resqApi('/api/weather');$('#weatherBody').innerHTML=`Current ${w.temperature_c}°C · Current wind ${w.wind_speed_kmh} km/h<br>Next 12h: rain probability up to <b>${w.rain_probability_pct}%</b> · rainfall <b>${w.forecast_rain_12h_mm} mm</b> · max wind <b>${w.forecast_max_wind_kmh} km/h</b><br><span class="mut" style="font-size:11px">Source: ${w.source} · ${w.forecast_window_hours}h forecast</span>`;const ew=w.early_warning;$('#warnBody').innerHTML=ew.level==='LOW'?'':`<div class="warnbox ${ew.level.toLowerCase()}"><b>⚠ ${ew.label}</b><br>${ew.text}<br><span class="mut" style="font-size:11px">${ew.disclaimer}</span></div>`;}catch(e){$('#weatherBody').textContent='Weather service temporarily unavailable';$('#warnBody').innerHTML='';}
+  const t = myTeam();   // use the team's real GPS position when known, otherwise the server default forecast point
+  const gps = t && t.location_source === 'GPS' && t.location_updated;
+  await resqLoadWeather($('#weatherBody'), { full: false }, gps ? t.lat : null, gps ? t.lng : null);
+  $('#warnBody').innerHTML = '';
 }
 loadWeather();setInterval(loadWeather,5*60*1000);
 
 async function boot() {
   try { teams = await resqApi('/api/teams'); incidents = await resqApi('/api/incidents'); }
   catch (e) { $('#empty').style.display = 'block'; $('#empty').textContent = 'Could not reach the backend. Check the API address.'; return; }
-  render(); connect(); startGps();
+  render(); loadWeather(); connect(); startGps();
 }
 function render() {
   const t = myTeam(), mine = activeMine(), a = mine[0], requests = openRequests();
@@ -76,7 +79,8 @@ function connect(){
     if(event==='incident_updated'||event==='incident_status_updated'||event==='route_updated'){const before=incidents.find(x=>x.id===data.id)?.status;upsertIncident(data);if(event!=='route_updated'&&before&&before!==data.status&&data.team_id===teamId)toast(`Status update · ${data.status.replaceAll('_',' ')}`,data.status==='COMPLETED'?'success':'info');render();return;}
     if(event==='team_updated'){upsertTeam(data);render();return;}
     if(event==='team_location_updated'){const t=teams.find(x=>x.id===data.team_id);if(t){t.lat=data.lat;t.lng=data.lng;t.location_updated=data.updated;if(data.team_id===teamId)render();}return;}
-    if(event==='weather_advisory'){toast(`⚠ Forecast-derived Advisory · ${data.advisory.text}`,'warn');return;}
+    if(event==='weather_advisory'){toast(`⚠ ${weatherToastText(data)}`,'warn');loadWeather();return;}
+    if(event==='control_alert'){toast(`🚨 Control Room: ${data.message}`,'danger');return;}
     if(event==='team_presence_updated'){resqApi('/api/teams').then(v=>{teams=v;render();}).catch(()=>{});}
   },setConn);
 }

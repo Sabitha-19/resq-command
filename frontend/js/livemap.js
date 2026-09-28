@@ -99,3 +99,67 @@ function LiveMap(elId, labels) {
     resize() { setTimeout(() => map.invalidateSize(), 50); },
   };
 }
+
+/* ---------------------------------------------------------------------------------------------
+   Weather Intelligence (shared by Control Room, Citizen and Rescue pages).
+   Every number comes from GET /api/weather (Open-Meteo). If that call fails the pages show
+   "Weather data unavailable" - no cached/fake values and no advisory is ever invented.
+   The advisory is FORECAST-DERIVED, never an official government warning.
+--------------------------------------------------------------------------------------------- */
+const wxEsc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const wxNum = (v, d = 0, unit = '') => (v == null || isNaN(v) ? '—' : (+v).toFixed(d) + unit);
+
+function weatherUnavailableHtml() {
+  return `<div class="wx-unavail"><b>Weather data unavailable</b><br>No weather advisory is being generated because the external weather service is unavailable.</div>`;
+}
+
+function advisoryHtml(w, compact) {
+  const ew = w.early_warning || {}, lvl = (ew.level || 'LOW').toUpperCase();
+  return `<div class="wx-advisory ${lvl.toLowerCase()}">
+    <div class="wx-advhead"><span class="wx-advtitle">${wxEsc(ew.label || 'Forecast-derived Advisory')}</span><span class="wx-level ${lvl.toLowerCase()}">${lvl}</span></div>
+    <div>${wxEsc(ew.text)}</div>
+    <div class="mut wx-small">Source: ${wxEsc(ew.source || w.source)} · ${wxEsc(ew.disclaimer || 'Forecast-derived advisory, not an official warning.')}</div></div>`;
+}
+
+/* opts.full = true -> Control Room layout with the 12-hour forecast strip; otherwise a compact card. */
+function renderWeather(w, opts) {
+  opts = opts || {};
+  const hours = w.hourly || [];
+  const metrics = `<div class="wx-metrics">
+    <div class="wx-m"><span class="mut">Temperature</span><b>${wxNum(w.temperature_c, 0, '°C')}</b></div>
+    <div class="wx-m"><span class="mut">Rain probability</span><b>${wxNum(w.rain_probability_pct, 0, '%')}</b><span class="mut wx-small">peak, next ${w.forecast_window_hours || 12}h</span></div>
+    <div class="wx-m"><span class="mut">Forecast rainfall</span><b>${wxNum(w.forecast_rain_12h_mm, 1, ' mm')}</b><span class="mut wx-small">next ${w.forecast_window_hours || 12}h total</span></div>
+    <div class="wx-m"><span class="mut">Wind speed</span><b>${wxNum(w.wind_speed_kmh, 0, ' km/h')}</b><span class="mut wx-small">max forecast ${wxNum(w.forecast_max_wind_kmh, 0, ' km/h')}</span></div></div>`;
+  const strip = hours.length ? `<div class="wx-fchead">${w.forecast_window_hours || 12}-HOUR FORECAST</div><div class="wx-hours">${hours.map(h => `<div class="wx-h">
+      <span class="mut">${wxEsc(String(h.time).slice(11, 16))}</span>
+      <div class="wx-bar" title="Rain probability ${h.rain_probability_pct}%"><i style="height:${Math.max(3, h.rain_probability_pct)}%"></i></div>
+      <b>${h.rain_probability_pct}%</b><span class="mut wx-small">${wxNum(h.precipitation_mm, 1)} mm</span><span class="mut wx-small">${wxNum(h.wind_speed_kmh, 0)} km/h</span></div>`).join('')}</div>` : '';
+  const foot = `<div class="mut wx-small">Source: ${wxEsc(w.source)} · updated ${new Date(w.updated * 1000).toLocaleTimeString()}${w.location ? ` · ${coordText(w.location.lat, w.location.lng)}` : ''}</div>`;
+  if (opts.full) return metrics + strip + advisoryHtml(w) + foot;
+  const compactLine = hours.length ? `<div class="mut wx-small" style="margin-top:6px">Next ${hours.length}h · hourly rain probability: ${hours.filter((_, k) => k % 3 === 0).map(h => `${wxEsc(String(h.time).slice(11, 16))} ${h.rain_probability_pct}%`).join(' · ')}</div>` : '';
+  return metrics + compactLine + advisoryHtml(w, true) + foot;
+}
+
+/* Fetches /api/weather and paints the given elements. Returns the weather object, or null on failure. */
+async function resqLoadWeather(bodyEl, opts, lat, lng) {
+  try {
+    const q = lat != null && lng != null ? `?lat=${lat}&lng=${lng}` : '';
+    const w = await resqApi('/api/weather' + q);
+    bodyEl.innerHTML = renderWeather(w, opts);
+    return w;
+  } catch (e) {
+    bodyEl.innerHTML = weatherUnavailableHtml();
+    return null;
+  }
+}
+
+/* Shared toast used for weather + control-room alerts on the phone pages. */
+function resqToast(msg, kind) {
+  const host = document.querySelector('#toasts'); if (!host) return;
+  const d = document.createElement('div'); d.className = 'toast ' + (kind || 'warn'); d.textContent = msg; host.append(d);
+  setTimeout(() => d.remove(), 6000);
+}
+function weatherToastText(data) {
+  const ew = data.advisory || {};
+  return ew.notification || `Weather Advisory: ${ew.text || 'forecast-derived advisory'}`;
+}

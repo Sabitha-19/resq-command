@@ -130,3 +130,27 @@ textarea{font:inherit;color:var(--tx);background:var(--bg2);border:1px solid var
 .completed-pop{animation:completePop .65s ease-out}@keyframes completePop{0%{transform:scale(.96);opacity:.5}60%{transform:scale(1.03)}100%{transform:scale(1);opacity:1}}
 .weather-banner{margin-top:8px}
 @media(max-width:600px){#mapEl{height:320px}.control-room #mapEl{height:360px}}
+
+/* ---- Weather Intelligence ---- */
+.wx-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:12px}
+.wx-m{background:var(--bg2);border:1px solid var(--bd);border-radius:12px;padding:10px 12px;display:grid;gap:2px}
+.wx-m b{font-size:22px;line-height:1.15}
+.wx-small{font-size:11px}
+.wx-fchead{font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--mut);margin:4px 0 6px}
+.wx-hours{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:12px}
+.wx-h{flex:0 0 58px;display:grid;justify-items:center;gap:2px;background:var(--bg2);border:1px solid var(--bd);border-radius:10px;padding:8px 4px;font-size:12px}
+.wx-bar{width:14px;height:44px;background:#2a2a2a;border-radius:6px;display:flex;align-items:flex-end;overflow:hidden}
+.wx-bar i{display:block;width:100%;background:#3b9eff}
+.wx-advisory{border-radius:12px;padding:10px 12px;border:1px solid var(--bd);background:var(--bg2);display:grid;gap:4px;font-size:13px;margin-bottom:6px}
+.wx-advisory.moderate{background:rgba(255,200,87,.1);border-color:rgba(255,200,87,.4)}
+.wx-advisory.high{background:rgba(255,59,48,.1);border-color:rgba(255,59,48,.45)}
+.wx-advhead{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.wx-advtitle{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
+.wx-level{font-size:13px;font-weight:800;border-radius:99px;padding:2px 12px;border:1px solid var(--bd)}
+.wx-level.low{color:var(--ok);border-color:rgba(57,217,138,.4)}
+.wx-level.moderate{color:var(--warn);border-color:rgba(255,200,87,.5)}
+.wx-level.high{color:#ff8a80;border-color:rgba(255,59,48,.55)}
+.wx-unavail{border:1px dashed var(--bd);border-radius:12px;padding:12px;color:var(--warn);font-size:13px}
+.frame .wx-metrics{grid-template-columns:repeat(2,1fr)}
+.frame .wx-m b{font-size:18px}
+.toast.alert{border-color:var(--bad)}
