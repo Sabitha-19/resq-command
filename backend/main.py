@@ -21,8 +21,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import update
 
-from database import init_db, get_session, User, RescueTeam, Incident, IncidentEvent
-
+try:
+    from .database import init_db, get_session, User, RescueTeam, Incident, IncidentEvent
+except ImportError:
+    from database import init_db, get_session, User, RescueTeam, Incident, IncidentEvent
 app = FastAPI(title="ResQ Command API")
 # Wide-open CORS on purpose: this is a LAN hackathon demo reached from phone
 # browsers on IPs the server can't predict in advance (see README "multi-device").
