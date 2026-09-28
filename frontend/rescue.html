@@ -1,0 +1,29 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ResQ Rescue - Team Phone</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="css/style.css"></head><body class="phone rescue-page">
+<div class="frame">
+ <header>
+  <div class="logo" style="font-size:16px"><b>RQ</b> ResQ Rescue</div>
+  <div style="display:grid;gap:4px;justify-items:end"><span class="connbadge offline" id="conn">○ CONNECTING</span><span class="connbadge offline" id="backendst" style="font-size:10px">○ Backend</span></div>
+ </header>
+ <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+  <div><div style="font-weight:700" id="whoName">Welcome</div><span class="mut" style="font-size:12px" id="teamLine">—</span><div class="mut" style="font-size:11px" id="gpsLine">📡 Location: starting…</div></div>
+  <a href="#" id="logout" class="mut" style="font-size:12px">Logout</a>
+ </div>
+ <nav class="pnav" aria-label="Rescue navigation"><a href="#list">SOS queue</a><a href="#weatherCard">Weather</a><a href="#active">Active assignment</a></nav>
+ <div class="card" id="weatherCard"><h2 style="font-size:15px;margin-bottom:6px">Weather Intelligence</h2><div id="weatherBody" class="mut">Loading forecast…</div><div id="warnBody" style="margin-top:8px"></div></div>
+ <div id="active" style="display:none;gap:12px">
+  <div id="activeHead"></div>
+  <div id="resMap" class="livemap" role="application" aria-label="Live map: route to the citizen"></div>
+  <div id="activeInfo"></div>
+ </div>
+ <div id="list" style="display:grid;gap:12px"></div>
+ <p id="empty" class="mut" style="display:none">No active requests for this team right now. New assignments appear here instantly.</p>
+</div><div id="toasts" aria-live="polite"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="js/ws.js"></script>
+<script src="js/livemap.js"></script>
+<script src="js/rescue.js"></script>
+</body></html>

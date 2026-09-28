@@ -1,0 +1,103 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ResQ Command - Login</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css"></head><body>
+<div class="login">
+ <section class="hero" aria-label="About ResQ Command">
+  <div class="logo"><b>RQ</b> ResQ Command</div>
+  <h1>Real-Time Disaster Intelligence</h1>
+  <p>See every SOS, rank it by explainable priority, dispatch the nearest team and follow the rescue to resolution, all from one live control room.</p>
+  <div class="radar" aria-hidden="true"><span class="blip" style="top:30%;left:38%"></span><span class="blip" style="top:55%;left:24%;animation-delay:.6s"></span><span class="blip" style="top:20%;left:60%;animation-delay:1.1s"></span></div>
+ </section>
+ <section style="display:grid;padding:24px">
+  <div class="lcard">
+   <div><h2 style="font-size:22px;margin:0">Sign in</h2><p class="mut">Choose your role to continue</p></div>
+   <div class="roletabs" role="tablist" aria-label="Role">
+    <button type="button" class="rtab on" data-role="CITIZEN">Citizen</button>
+    <button type="button" class="rtab" data-role="CONTROL_ROOM">Control Room</button>
+    <button type="button" class="rtab" data-role="RESCUE_TEAM">Rescue Team</button>
+   </div>
+
+   <form id="loginForm" style="display:grid;gap:14px">
+    <label>Email<input id="em" type="email" autocomplete="username" required></label>
+    <label>Password<input id="pw" type="password" autocomplete="current-password" required></label>
+    <p id="err" class="mut" role="alert" style="color:var(--bad)"></p>
+    <button class="btn-o" type="submit">Log in</button>
+    <p class="mut" id="switchToRegister" style="font-size:13px">New citizen? <a href="#" id="showRegister" style="color:var(--o2);text-decoration:underline">Create an account</a></p>
+    <p class="mut" id="testAccts" style="font-size:12px"></p>
+   </form>
+
+   <form id="registerForm" style="display:none;gap:14px">
+    <label>Full name<input id="rName" type="text" required></label>
+    <label>Email<input id="rEmail" type="email" autocomplete="username" required></label>
+    <label>Password<input id="rPw" type="password" autocomplete="new-password" required minlength="4"></label>
+    <p id="rErr" class="mut" role="alert" style="color:var(--bad)"></p>
+    <button class="btn-o" type="submit">Create account &amp; continue</button>
+    <p class="mut" style="font-size:13px">Already have an account? <a href="#" id="showLogin" style="color:var(--o2);text-decoration:underline">Log in</a></p>
+   </form>
+  </div>
+ </section>
+</div>
+<style>
+.roletabs{display:flex;gap:6px;background:var(--bg2);border-radius:10px;padding:4px}
+.rtab{flex:1;background:transparent;border:none;border-radius:8px;padding:8px 6px;font-size:13px;font-weight:600;color:var(--mut)}
+.rtab.on{background:var(--o);color:#111}
+</style>
+<script src="js/ws.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+let role = 'CITIZEN';
+const TEST_ACCOUNTS = {
+  CITIZEN: 'No test account needed - register above, or log in if you already have.',
+  CONTROL_ROOM: 'Test account: control@resq.demo / resq123',
+  RESCUE_TEAM: 'Test account: alpha@resq.demo / resq123 (Alpha Rescue)',
+};
+
+// already signed in? skip straight to the right page.
+(function bounce() {
+  const a = resqAuth();
+  if (a && a.token) go(a.role);
+})();
+
+function go(r) {
+  if (r === 'CITIZEN') location.href = 'citizen.html';
+  else if (r === 'CONTROL_ROOM') location.href = 'dashboard.html';
+  else if (r === 'RESCUE_TEAM') location.href = 'rescue.html';
+}
+
+document.querySelectorAll('.rtab').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.rtab').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); role = b.dataset.role;
+  $('#switchToRegister').style.display = role === 'CITIZEN' ? 'block' : 'none';
+  $('#testAccts').textContent = TEST_ACCOUNTS[role];
+  showLogin();
+});
+$('#testAccts').textContent = TEST_ACCOUNTS.CITIZEN;
+
+function showRegister() { $('#loginForm').style.display = 'none'; $('#registerForm').style.display = 'grid'; }
+function showLogin() { $('#registerForm').style.display = 'none'; $('#loginForm').style.display = 'grid'; }
+$('#showRegister').onclick = e => { e.preventDefault(); showRegister(); };
+$('#showLogin').onclick = e => { e.preventDefault(); showLogin(); };
+
+$('#loginForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('#err').textContent = '';
+  try {
+    const auth = await resqApi('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: $('#em').value, password: $('#pw').value }) });
+    if (auth.role !== role) { $('#err').textContent = `That account is registered as ${auth.role.replace('_', ' ')}, not ${role.replace('_', ' ')}.`; return; }
+    resqSetAuth(auth);
+    go(auth.role);
+  } catch (err) { $('#err').textContent = err.message || 'Login failed'; }
+});
+
+$('#registerForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('#rErr').textContent = '';
+  try {
+    const auth = await resqApi('/api/auth/register', { method: 'POST', body: JSON.stringify({ name: $('#rName').value, email: $('#rEmail').value, password: $('#rPw').value }) });
+    resqSetAuth(auth);
+    go(auth.role);
+  } catch (err) { $('#rErr').textContent = err.message || 'Could not create account'; }
+});
+</script>
+</body></html>

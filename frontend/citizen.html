@@ -1,0 +1,64 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ResQ Citizen - Send SOS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="css/style.css"></head><body class="phone citizen-page">
+<div class="frame">
+ <header>
+  <div class="logo" style="font-size:16px"><b>RQ</b> ResQ Citizen</div>
+  <div style="display:grid;gap:4px;justify-items:end"><span class="connbadge offline" id="conn">○ CONNECTING</span><span class="connbadge offline" id="backendst" style="font-size:10px">○ Backend</span></div>
+ </header>
+ <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+  <div><div style="font-weight:700" id="whoName">Welcome</div><span class="mut" style="font-size:12px">Citizen</span></div>
+  <a href="#" id="logout" class="mut" style="font-size:12px">Logout</a>
+ </div>
+ <nav class="pnav" aria-label="Citizen navigation">
+  <a href="#formView">SOS</a><a href="#weatherCard">Weather</a><a href="#trackView">My Incidents</a>
+ </nav>
+
+ <div class="card" id="weatherCard" style="margin-bottom:12px">
+  <h2 style="font-size:15px;margin-bottom:6px">Weather Intelligence</h2>
+  <div id="weatherBody" class="mut">Loading weather…</div>
+  <div id="warnBody" style="margin-top:8px"></div>
+ </div>
+
+ <section id="formView">
+  <div id="citizenLiveMap" class="livemap" role="application" aria-label="Live map of your current GPS location"></div>
+   <div class="locbox">
+   <span id="locTxt">📍 Detecting location…</span>
+   <button type="button" id="demoLoc" title="For development/testing only - this is NOT your real GPS position">Demo location (testing only)</button>
+  </div>
+
+  <form id="sosForm" style="display:grid;gap:14px;margin-top:4px">
+   <div class="field"><label for="etype">Emergency type</label>
+    <select id="etype"><option>Flood</option><option>Cyclone</option><option>Landslide</option><option>Earthquake</option><option>Medical</option><option>Fire</option></select></div>
+   <div class="field"><label>People with you</label><div class="counter"><button type="button" data-k="people" data-d="-1">−</button><span id="people">1</span><button type="button" data-k="people" data-d="1">+</button></div></div>
+   <div class="field"><label>Children</label><div class="counter"><button type="button" data-k="children" data-d="-1">−</button><span id="children">0</span><button type="button" data-k="children" data-d="1">+</button></div></div>
+   <div class="field"><label>Elderly</label><div class="counter"><button type="button" data-k="elderly" data-d="-1">−</button><span id="elderly">0</span><button type="button" data-k="elderly" data-d="1">+</button></div></div>
+   <div class="field"><label>Injured</label><div class="counter"><button type="button" data-k="injured" data-d="-1">−</button><span id="injured">0</span><button type="button" data-k="injured" data-d="1">+</button></div></div>
+   <div class="field"><label for="desc">What's happening? (optional)</label><textarea id="desc" placeholder="e.g. Water entering the house, second floor is safe for now"></textarea></div>
+   <div class="field"><label for="photo">Attach a photo (optional)</label><input type="file" id="photo" accept="image/*" capture="environment"></div>
+   <p id="err" class="mut" role="alert" style="color:var(--bad)"></p>
+   <button type="submit" class="sos-btn">🚨 SEND SOS</button>
+   <a class="sms-link" id="smsLink" href="#">📱 Send via SMS instead</a>
+  </form>
+ </section>
+
+ <section id="trackView" style="display:none">
+  <h1 id="trackId"></h1>
+  <div class="row"><span id="trackType" class="mut"></span><span class="stbadge" id="trackStatus"></span></div>
+  <div id="citMap" class="livemap" role="application" aria-label="Live map of your SOS and rescue team"></div>
+  <p id="mapNote" class="mut" style="font-size:12px;margin:0">📍 Your SOS location · waiting for rescue team…</p>
+  <div class="card" id="teamCard" style="display:none">
+   <h2 style="margin-bottom:6px">🚑 <span id="teamName">Rescue team</span> assigned</h2>
+   <div id="teamInfo"></div>
+  </div>
+  <div class="track" id="steps"></div>
+  <p class="mut" style="font-size:12px">This request stays visible on this phone. Closing the tab won't cancel it.</p>
+ </section>
+</div><div id="toasts" aria-live="polite"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="js/ws.js"></script>
+<script src="js/livemap.js"></script>
+<script src="js/citizen.js"></script>
+</body></html>

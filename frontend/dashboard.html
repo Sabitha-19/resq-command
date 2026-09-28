@@ -1,0 +1,57 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ResQ Command - Command Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="css/style.css"></head><body class="control-room">
+<div id="banner" role="status"></div>
+<div class="app">
+ <aside class="side" id="side" aria-label="Main navigation">
+  <div class="logo"><b>RQ</b><span class="lbl">ResQ Command</span></div>
+  <a class="nav on" href="#kpis" title="Overview"><span>◉</span><span class="lbl">Overview</span></a>
+  <a class="nav" href="#queue" title="Live Incidents"><span>⚠</span><span class="lbl">Live Incidents</span></a>
+  <a class="nav" href="#weather" title="Weather &amp; Alerts"><span>☁</span><span class="lbl">Weather &amp; Alerts</span></a>
+  <a class="nav" href="#map" title="Live Map"><span>🗺</span><span class="lbl">Live Map</span></a>
+  <a class="nav" href="#teams" title="Rescue Teams"><span>⛑</span><span class="lbl">Rescue Teams</span></a>
+  <a class="nav" href="#history" title="Incident History"><span>🕘</span><span class="lbl">Incident History</span></a>
+  <a class="nav" href="#feed" title="Activity and notifications"><span>🔔</span><span class="lbl">Notifications</span></a>
+  <button id="collapse" class="nav" title="Collapse sidebar" aria-label="Collapse sidebar" style="background:none"><span>⇔</span><span class="lbl">Collapse</span></button>
+  <div class="foot"><span id="statusline"><i class="dot"></i> System online</span>
+   <span id="who">Officer</span><span class="mut" style="font-size:11px">Control Room Officer</span>
+   <a href="#" id="logout"><span>Log out</span></a></div>
+ </aside>
+ <main>
+  <header class="top">
+   <strong id="clock" aria-live="off"></strong>
+   <span class="connbadge offline" id="wsst">○ CONNECTING</span>
+   <span class="connbadge offline" id="backendst">○ Backend</span>
+   <span class="spacer"></span>
+   <a href="citizen" target="_blank" class="mut" title="Open the citizen phone preview in a new tab" style="font-size:12px">📱 Citizen app</a>
+   <a href="rescue" target="_blank" class="mut" title="Open the rescue team phone preview in a new tab" style="font-size:12px">⛑ Rescue app</a>
+   <input id="search" type="search" placeholder="Search incidents" aria-label="Search incidents">
+   <button id="bell" title="Notifications" aria-label="Notifications">🔔 <span class="badge" id="nb">0</span></button>
+   <button class="btn-o" id="bcast" title="Send an emergency alert to all teams">Broadcast alert</button>
+  </header>
+  <section class="kpis" id="kpis" aria-label="Key indicators"></section>
+  <div class="card" id="weather" style="margin-bottom:16px">
+   <h2>Weather Intelligence <span class="mut" id="weatherLoc" style="font-weight:400"></span></h2>
+   <div id="weatherBody" class="mut">Loading weather…</div>
+   <div id="warnBody" style="margin-top:8px"></div>
+  </div>
+  <div class="grid">
+   <div class="col"><div class="card"><h2 id="map">Live disaster map</h2><div id="mapEl" role="application" aria-label="Live disaster map"></div>
+    <div class="legend"><span>🔴 SOS incident</span><span>🟢 Team available</span><span>🟠 Assigned</span><span>🔵 On the way</span><span>🟣 Reached</span><span>⚪ Offline/unknown</span><span>🟦 Shelter</span></div>
+    <div id="routeCards"></div></div></div>
+   <div class="col">
+    <div class="card"><h2>Priority incident queue</h2><div class="q" id="queue"></div></div>
+    <div class="card" id="teams"><h2>Rescue teams</h2><div id="tl"></div></div>
+    <div class="card" id="history"><h2>Incident history</h2><div class="q" id="historyList"></div></div>
+    <div class="card" id="feed"><h2>Activity feed</h2><ul class="feed" id="fl"></ul></div>
+   </div>
+  </div>
+ </main>
+</div>
+<aside id="drawer" aria-label="Incident details"></aside><div id="toasts" aria-live="polite"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="js/ws.js"></script>
+<script src="js/livemap.js"></script>
+<script src="js/dashboard.js"></script></body></html>
