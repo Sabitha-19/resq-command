@@ -9,7 +9,7 @@ The same server serves the frontend AND the /citizen and /rescue phone pages,
 so this is the only process you need to start. See README.md for the full
 multi-device (laptop + 2 phones) test walkthrough and test accounts.
 """
-import asyncio, base64, hashlib, hmac, json, math, os, random, time
+import asyncio, base64, hashlib, hmac, json, logging, math, os, random, time
 from typing import List, Optional
 
 import httpx
@@ -25,6 +25,10 @@ try:
     from .database import init_db, get_session, User, RescueTeam, Incident, IncidentEvent
 except ImportError:
     from database import init_db, get_session, User, RescueTeam, Incident, IncidentEvent
+
+# Logger that shows up in Render's log stream (uvicorn already routes this to stdout/stderr).
+logger = logging.getLogger("uvicorn.error")
+
 app = FastAPI(title="ResQ Command API")
 # Wide-open CORS on purpose: this is a LAN hackathon demo reached from phone
 # browsers on IPs the server can't predict in advance (see README "multi-device").
@@ -32,6 +36,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 SECRET = os.getenv("RESQ_SECRET", "change-me-in-.env").encode()
+if SECRET == b"change-me-in-.env":
+    logger.warning("RESQ_SECRET is not set - using the insecure default. Set it in Render > Environment.")
 
 init_db()
 
@@ -213,6 +219,42 @@ def enrich(i: Incident) -> dict:
 
 
 # ================================================================================
+# Outbound HTTP helper - shared by weather / routing / geocoding.
+# Cloud hosts (Render etc.) can behave differently from a home network: shared IPs get
+# rate-limited (HTTP 429), IPv6 routes can be broken, and cold starts make requests slow.
+# So: longer timeout, a few retries with backoff, and a final IPv4-only attempt.
+# Every failure is LOGGED so the real cause is visible in the Render logs.
+# ================================================================================
+async def http_get_json(url: str, params: dict, *, label: str, timeout: float = 15,
+                        attempts: int = 3, headers: Optional[dict] = None):
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, attempts + 1):
+        # Last attempt is forced to IPv4 (fixes "Network is unreachable" on hosts with broken IPv6).
+        force_ipv4 = attempt == attempts and attempts > 1
+        transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0") if force_ipv4 else None
+        try:
+            async with httpx.AsyncClient(timeout=timeout, headers=headers, transport=transport) as client:
+                r = await client.get(url, params=params)
+                r.raise_for_status()
+                return r.json()
+        except httpx.HTTPStatusError as e:
+            last_exc = e
+            code = e.response.status_code
+            logger.warning("%s attempt %d/%d failed: HTTP %s - %s", label, attempt, attempts, code, e.response.text[:200])
+            # Client errors other than 429 will not succeed on retry (bad params, etc.)
+            if 400 <= code < 500 and code != 429:
+                break
+        except Exception as e:
+            last_exc = e
+            logger.warning("%s attempt %d/%d failed: %s: %r%s", label, attempt, attempts,
+                           type(e).__name__, e, " (IPv4 forced)" if force_ipv4 else "")
+        if attempt < attempts:
+            await asyncio.sleep(1.5 * attempt)
+    logger.error("%s FAILED after retries: %r", label, last_exc)
+    raise last_exc if last_exc else RuntimeError(f"{label} failed")
+
+
+# ================================================================================
 # Road routing (OSRM public demo server) - computed on the BACKEND and stored on the
 # incident, so the control room, rescue phone and citizen phone all show the SAME route,
 # distance and ETA. OSRM = road routing + route-based duration. It has NO live-traffic data.
@@ -226,14 +268,14 @@ async def osrm_route(a_lat, a_lng, b_lat, b_lng):
     """Returns (km, minutes, [[lat,lng],...]) or None if the routing service fails.
     NOTE: OSRM wants lng,lat order (not lat,lng)."""
     try:
-        async with httpx.AsyncClient(timeout=6) as client:
-            r = await client.get(f"{OSRM_URL}/route/v1/driving/{a_lng},{a_lat};{b_lng},{b_lat}",
-                                 params={"overview": "full", "geometries": "geojson"})
-            r.raise_for_status()
-            rt = r.json()["routes"][0]
+        j = await http_get_json(f"{OSRM_URL}/route/v1/driving/{a_lng},{a_lat};{b_lng},{b_lat}",
+                                {"overview": "full", "geometries": "geojson"},
+                                label="OSRM route", timeout=10, attempts=2)
+        rt = j["routes"][0]
         pts = [[c[1], c[0]] for c in rt["geometry"]["coordinates"]]
         return round(rt["distance"] / 1000, 1), max(1, round(rt["duration"] / 60)), pts
-    except Exception:
+    except Exception as e:
+        logger.error("OSRM route unavailable: %r", e)
         return None
 
 
@@ -426,7 +468,9 @@ def health():
 _weather_cache: dict = {}
 _weather_advisories_sent: dict = {}      # (location, level, triggers) -> time the notification was sent
 ADVISORY_RENOTIFY_S = 3 * 3600           # the same advisory is re-announced at most every 3 hours
+WEATHER_CACHE_S = 600                    # 10 min: fewer upstream calls = far less chance of a 429 on a shared IP
 WEATHER_UNAVAILABLE_DETAIL = "Weather data unavailable"
+_weather_locks: dict = {}                # one in-flight upstream request per location
 
 
 def _advisory_notification(triggers: list, level: str) -> str:
@@ -447,73 +491,84 @@ async def weather(lat: float = 11.9416, lng: float = 79.8083):
     fails, HTTP 503 is returned and NO advisory is generated (stale values are never served)."""
     key = (round(lat, 2), round(lng, 2))
     cached = _weather_cache.get(key)
-    if cached and time.time() - cached["_t"] < 300:
+    if cached and time.time() - cached["_t"] < WEATHER_CACHE_S:
         return cached["_data"]
-    try:
-        async with httpx.AsyncClient(timeout=8) as client:
-            r = await client.get("https://api.open-meteo.com/v1/forecast", params={
+
+    # Serialise upstream calls per location so several dashboard tabs don't fire parallel requests.
+    lock = _weather_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        cached = _weather_cache.get(key)
+        if cached and time.time() - cached["_t"] < WEATHER_CACHE_S:
+            return cached["_data"]
+
+        try:
+            j = await http_get_json("https://api.open-meteo.com/v1/forecast", {
                 "latitude": lat, "longitude": lng,
                 "current": "temperature_2m,precipitation,weather_code,wind_speed_10m",
                 "hourly": "precipitation,precipitation_probability,wind_speed_10m",
                 "forecast_hours": 12,
                 "timezone": "auto",
-            })
-            r.raise_for_status()
-            j = r.json()
-        cur = j.get("current") or {}
-        hourly = j.get("hourly") or {}
-        times = (hourly.get("time") or [])[:12]
-        if cur.get("temperature_2m") is None or not times:
-            raise ValueError("Open-Meteo response missing current/hourly data")
+            }, label="Open-Meteo weather", timeout=15, attempts=3)
 
-        def col(name):
-            vals = list(hourly.get(name) or [])[:12]
-            return [float(x or 0) for x in vals] + [0.0] * (len(times) - len(vals))
+            cur = j.get("current") or {}
+            hourly = j.get("hourly") or {}
+            times = (hourly.get("time") or [])[:12]
+            if cur.get("temperature_2m") is None or not times:
+                raise ValueError(f"Open-Meteo response missing current/hourly data: {str(j)[:300]}")
 
-        probs, precip, winds = col("precipitation_probability"), col("precipitation"), col("wind_speed_10m")
-        hours = [{"time": times[k], "rain_probability_pct": round(probs[k]), "precipitation_mm": round(precip[k], 1),
-                  "wind_speed_kmh": round(winds[k], 1)} for k in range(len(times))]
-        rain_prob = max(probs, default=0)
-        max_hourly_rain = max(precip, default=0)
-        forecast_rain_total = round(sum(precip), 1)
-        max_wind = max(winds, default=float(cur.get("wind_speed_10m") or 0))
-        # Prototype thresholds are deliberately described as advisory rules, not official alerts.
-        triggers = []
-        if rain_prob >= 70:
-            triggers.append(f"rain probability up to {round(rain_prob)}%")
-        if max_hourly_rain >= 10 or forecast_rain_total >= 25:
-            triggers.append(f"forecast rainfall up to {max_hourly_rain:.1f} mm/h ({forecast_rain_total:.1f} mm/12h)")
-        if max_wind >= 50:
-            triggers.append(f"wind up to {max_wind:.0f} km/h")
-        if len(triggers) >= 2 or max_hourly_rain >= 20 or max_wind >= 65:
-            risk = "HIGH"
-        elif triggers:
-            risk = "MODERATE"
-        else:
-            risk = "LOW"
-        data = {
-            "temperature_c": cur.get("temperature_2m"),
-            "precipitation_mm": cur.get("precipitation", 0),
-            "rain_probability_pct": round(rain_prob),
-            "forecast_rain_12h_mm": forecast_rain_total,
-            "forecast_max_hourly_rain_mm": max_hourly_rain,
-            "forecast_max_wind_kmh": round(max_wind, 1),
-            "wind_speed_kmh": cur.get("wind_speed_10m"),
-            "hourly": hours,
-            "location": {"lat": lat, "lng": lng},
-            "source": "Open-Meteo", "updated": time.time(),
-            "forecast_window_hours": 12,
-            "early_warning": {
-                "level": risk,
-                "label": "Forecast-derived Advisory",
-                "text": ("Forecast risk indicators detected: " + "; ".join(triggers) if triggers
-                         else "No configured rain or wind advisory threshold is met in the next 12 hours."),
-                "triggers": triggers,
-                "notification": _advisory_notification(triggers, risk) if triggers else None,
-                "source": "Open-Meteo",
-                "disclaimer": "Forecast-derived advisory, not an official warning. Thresholds are prototype rules; no government warning source is integrated.",
-            },
-        }
+            def col(name):
+                vals = list(hourly.get(name) or [])[:12]
+                return [float(x or 0) for x in vals] + [0.0] * (len(times) - len(vals))
+
+            probs, precip, winds = col("precipitation_probability"), col("precipitation"), col("wind_speed_10m")
+            hours = [{"time": times[k], "rain_probability_pct": round(probs[k]), "precipitation_mm": round(precip[k], 1),
+                      "wind_speed_kmh": round(winds[k], 1)} for k in range(len(times))]
+            rain_prob = max(probs, default=0)
+            max_hourly_rain = max(precip, default=0)
+            forecast_rain_total = round(sum(precip), 1)
+            max_wind = max(winds, default=float(cur.get("wind_speed_10m") or 0))
+            # Prototype thresholds are deliberately described as advisory rules, not official alerts.
+            triggers = []
+            if rain_prob >= 70:
+                triggers.append(f"rain probability up to {round(rain_prob)}%")
+            if max_hourly_rain >= 10 or forecast_rain_total >= 25:
+                triggers.append(f"forecast rainfall up to {max_hourly_rain:.1f} mm/h ({forecast_rain_total:.1f} mm/12h)")
+            if max_wind >= 50:
+                triggers.append(f"wind up to {max_wind:.0f} km/h")
+            if len(triggers) >= 2 or max_hourly_rain >= 20 or max_wind >= 65:
+                risk = "HIGH"
+            elif triggers:
+                risk = "MODERATE"
+            else:
+                risk = "LOW"
+            data = {
+                "temperature_c": cur.get("temperature_2m"),
+                "precipitation_mm": cur.get("precipitation", 0),
+                "rain_probability_pct": round(rain_prob),
+                "forecast_rain_12h_mm": forecast_rain_total,
+                "forecast_max_hourly_rain_mm": max_hourly_rain,
+                "forecast_max_wind_kmh": round(max_wind, 1),
+                "wind_speed_kmh": cur.get("wind_speed_10m"),
+                "hourly": hours,
+                "location": {"lat": lat, "lng": lng},
+                "source": "Open-Meteo", "updated": time.time(),
+                "forecast_window_hours": 12,
+                "early_warning": {
+                    "level": risk,
+                    "label": "Forecast-derived Advisory",
+                    "text": ("Forecast risk indicators detected: " + "; ".join(triggers) if triggers
+                             else "No configured rain or wind advisory threshold is met in the next 12 hours."),
+                    "triggers": triggers,
+                    "notification": _advisory_notification(triggers, risk) if triggers else None,
+                    "source": "Open-Meteo",
+                    "disclaimer": "Forecast-derived advisory, not an official warning. Thresholds are prototype rules; no government warning source is integrated.",
+                },
+            }
+        except Exception as e:
+            logger.exception("Weather fetch/parse failed for %s: %r", key, e)
+            _weather_cache.pop(key, None)
+            raise HTTPException(503, WEATHER_UNAVAILABLE_DETAIL)
+
         _weather_cache[key] = {"_t": time.time(), "_data": data}
         if risk != "LOW":
             advisory_key = (key, risk, tuple(triggers))
@@ -522,9 +577,6 @@ async def weather(lat: float = 11.9416, lng: float = 79.8083):
                 _weather_advisories_sent[advisory_key] = time.time()
                 await broadcast("weather_advisory", {"location": {"lat": lat, "lng": lng}, "advisory": data["early_warning"], "weather": data})
         return data
-    except Exception:
-        _weather_cache.pop(key, None)
-        raise HTTPException(503, WEATHER_UNAVAILABLE_DETAIL)
 
 
 class AlertIn(BaseModel):
@@ -887,14 +939,15 @@ async def reverse_geocode(lat: float, lng: float, user: User = Depends(get_curre
     if key in _geo_cache:
         return {"address": _geo_cache[key]}
     try:
-        async with httpx.AsyncClient(timeout=5, headers={"User-Agent": "ResQ-Command-student-prototype/1.0"}) as client:
-            r = await client.get("https://nominatim.openstreetmap.org/reverse",
-                                 params={"lat": lat, "lon": lng, "format": "jsonv2", "zoom": 16})
-            r.raise_for_status()
-            addr = r.json().get("display_name")
+        j = await http_get_json("https://nominatim.openstreetmap.org/reverse",
+                                {"lat": lat, "lon": lng, "format": "jsonv2", "zoom": 16},
+                                label="Nominatim geocode", timeout=8, attempts=2,
+                                headers={"User-Agent": "ResQ-Command-student-prototype/1.0"})
+        addr = j.get("display_name")
         _geo_cache[key] = addr
         return {"address": addr}
-    except Exception:
+    except Exception as e:
+        logger.error("Reverse geocode failed: %r", e)
         return {"address": None}
 
 
